@@ -10,8 +10,8 @@ A fullstack web application that processes, stores, and visualizes New York City
 | Name | Role |
 |------|------|
 | Nshimyumurwa Mary Therese | Team Lead, Flask API, Database Design |
-| Clive Mushipe | Data Pipeline, Backend Support |
-| Davy Dushimiyimana | Frontend Dashboard |
+| Davy Dushimiyimana| Data Pipeline, Backend Support |
+| Clive Mushipe | Frontend Dashboard |
 | Aimable Bancunguye | DSA Implementation |
 | Eloi Mizero | Documentation and Technical Report |
 
@@ -36,6 +36,7 @@ Watch the 5-minute project demo here: [insert link after recording]
     ├── frontend/
     │   ├── index.html
     │   └── css/
+    │   └── js/
     ├── database/
     │   └── schema.sql
     ├── dsa/
