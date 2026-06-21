@@ -2,6 +2,7 @@ data/yellow_tripdata_2019-01.csv
 data/yellow_tripdata_*.parquet
 database/mobility.db
 backend/__pycache__/
+docs/.venv/
 .continue/
 .kilo/
 *.pyc
