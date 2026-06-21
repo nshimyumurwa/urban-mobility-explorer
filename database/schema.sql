@@ -18,6 +18,16 @@ CREATE TABLE IF NOT EXISTS trips (
     total_amount REAL,
     trip_duration_minutes REAL,
     fare_per_mile REAL,
+    speed_mph REAL,
     FOREIGN KEY (pickup_location_id) REFERENCES zones(location_id),
     FOREIGN KEY (dropoff_location_id) REFERENCES zones(location_id)
+);
+
+CREATE TABLE IF NOT EXISTS exclusion_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT,
+    row_index INTEGER,
+    reason TEXT,
+    details TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );

@@ -1,3 +1,7 @@
-data/yellow_tripdata_2019-01.csv 
-database/mobility.db 
-backend/__pycache__/ 
+data/yellow_tripdata_2019-01.csv
+data/yellow_tripdata_*.parquet
+database/mobility.db
+backend/__pycache__/
+.continue/
+.kilo/
+*.pyc
