@@ -34,51 +34,7 @@
       <button id="errorBannerRetry" class="btn btn--ghost">Retry</button>
     </div>
 
-    <!-- ============ KPI METER ROW ============ -->
-    <section class="meters" aria-label="Summary metrics">
-      <div class="meter" id="meterRevenue">
-        <span class="meter__label">Total Revenue</span>
-        <span class="meter__value" data-skeleton>— — — —</span>
-        <span class="meter__sub"></span>
-      </div>
-      <div class="meter" id="meterTrips">
-        <span class="meter__label">Total Trips</span>
-        <span class="meter__value" data-skeleton>— — — —</span>
-        <span class="meter__sub"></span>
-      </div>
-      <div class="meter" id="meterTipPct">
-        <span class="meter__label">Avg Tip %</span>
-        <span class="meter__value" data-skeleton>— — —</span>
-        <span class="meter__sub"></span>
-      </div>
-      <div class="meter" id="meterRevenuePerTrip">
-        <span class="meter__label">Revenue per Trip</span>
-        <span class="meter__value" data-skeleton>— — —</span>
-        <span class="meter__sub"></span>
-      </div>
-      <div class="meter" id="meterPeakHour">
-        <span class="meter__label">Peak Demand Hour</span>
-        <span class="meter__value" data-skeleton>— — —</span>
-        <span class="meter__sub"></span>
-      </div>
-      <div class="meter" id="meterTopBorough">
-        <span class="meter__label">Most Active Borough</span>
-        <span class="meter__value" data-skeleton>— — —</span>
-        <span class="meter__sub"></span>
-      </div>
-    </section>
-
-    <!-- ============ KEY INSIGHTS ============ -->
-    <section class="panel insights-panel" aria-label="Key insights">
-      <div class="panel__header">
-        <h2>Key Insights</h2>
-      </div>
-      <ul class="insights-list" id="keyInsightsList">
-        <li>Loading insights…</li>
-      </ul>
-    </section>
-
-    <!-- ============ FILTERS ============ -->
+    <!-- ============ FILTERS (now first, since they drive everything below) ============ -->
     <section class="panel filters" aria-label="Filters">
       <div class="panel__header">
         <h2>Filters</h2>
@@ -117,222 +73,63 @@
           <button type="submit" class="btn btn--primary">Apply filters</button>
           <button type="button" id="resetFiltersBtn" class="btn btn--ghost">Reset</button>
         </div>
-
-        <details class="advanced-filters" id="advancedFiltersDetails">
-          <summary>Advanced filters</summary>
-          <div class="filters__grid filters__grid--advanced">
-            <label class="field">
-              <span>Passengers</span>
-              <select id="filterPassengers" name="passenger_count">
-                <option value="">Any</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-                <option value="6">6</option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span>Min fare ($)</span>
-              <input type="number" id="filterMinFare" name="min_fare" min="0" step="0.5" placeholder="0" />
-            </label>
-
-            <label class="field">
-              <span>Max fare ($)</span>
-              <input type="number" id="filterMaxFare" name="max_fare" min="0" step="0.5" placeholder="any" />
-            </label>
-
-            <label class="field">
-              <span>Min distance (mi)</span>
-              <input type="number" id="filterMinDistance" name="min_distance" min="0" step="0.1" placeholder="0" />
-            </label>
-
-            <label class="field">
-              <span>Max distance (mi)</span>
-              <input type="number" id="filterMaxDistance" name="max_distance" min="0" step="0.1" placeholder="any" />
-            </label>
-          </div>
-        </details>
       </form>
     </section>
 
-    <!-- ============ CENTERPIECE: TRIP DEMAND ============ -->
+    <!-- ============ KPI METER ROW ============ -->
+    <section class="meters" aria-label="Summary metrics">
+      <div class="meter" id="meterTrips">
+        <span class="meter__label">Total Trips</span>
+        <span class="meter__value" data-skeleton>— — — —</span>
+        <span class="meter__sub"></span>
+      </div>
+      <div class="meter" id="meterRevenue">
+        <span class="meter__label">Total Revenue</span>
+        <span class="meter__value" data-skeleton>— — — —</span>
+        <span class="meter__sub"></span>
+      </div>
+      <div class="meter" id="meterFare">
+        <span class="meter__label">Average Fare</span>
+        <span class="meter__value" data-skeleton>— — —</span>
+        <span class="meter__sub"></span>
+      </div>
+      <div class="meter" id="meterDistance">
+        <span class="meter__label">Average Distance</span>
+        <span class="meter__value" data-skeleton>— — —</span>
+        <span class="meter__sub"></span>
+      </div>
+      <div class="meter" id="meterDuration">
+        <span class="meter__label">Average Trip Duration</span>
+        <span class="meter__value" data-skeleton>— — —</span>
+        <span class="meter__sub"></span>
+      </div>
+      <div class="meter" id="meterTipPct">
+        <span class="meter__label">Average Tip %</span>
+        <span class="meter__value" data-skeleton>— — —</span>
+        <span class="meter__sub"></span>
+      </div>
+    </section>
+
+    <!-- ============ TRIP DEMAND BY HOUR ============ -->
     <section class="panel panel--hero">
       <div class="panel__header">
         <h2>Trip Demand Throughout the Day</h2>
-        <div class="segmented" id="demandGranularityToggle" role="group" aria-label="Demand granularity">
-          <button type="button" class="segmented__btn is-active" data-granularity="hour">Hourly</button>
-          <button type="button" class="segmented__btn" data-granularity="day">Daily</button>
-        </div>
+        <span class="panel__hint" id="tripsSampleNote"></span>
       </div>
       <div class="chart-wrap chart-wrap--hero">
         <canvas id="hourChart" role="img" aria-label="Trip demand throughout the day, trip volume versus average fare"></canvas>
         <div class="chart-status" id="hourChartStatus">Loading…</div>
       </div>
       <p class="insight" id="hourInsight"></p>
-    </section>
 
-    <!-- ============ CHARTS: REVENUE BY BOROUGH + WHEN NEW YORKERS RIDE ============ -->
-    <section class="panel-row">
-      <div class="panel panel--half">
-        <div class="panel__header">
-          <h2>Revenue by Borough</h2>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="boroughChart" role="img" aria-label="Revenue by pickup borough"></canvas>
-          <div class="chart-status" id="boroughChartStatus">Loading…</div>
-        </div>
-        <p class="insight" id="boroughInsight"></p>
-      </div>
-
-      <div class="panel panel--half">
-        <div class="panel__header">
-          <h2>When New Yorkers Ride</h2>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="timeOfDayChart" role="img" aria-label="Trips by time of day"></canvas>
-          <div class="chart-status" id="timeOfDayChartStatus">Loading…</div>
-        </div>
-        <p class="insight" id="timeOfDayInsight"></p>
-      </div>
-    </section>
-
-    <!-- ============ TOP PICKUP ZONES + BOROUGH RANKINGS ============ -->
-    <section class="panel-row">
-      <div class="panel panel--half">
-        <div class="panel__header">
-          <h2>Top Pickup Zones</h2>
-          <span class="panel__hint">Top 10 by trip volume</span>
-        </div>
-        <div class="table-scroll table-scroll--short">
-          <table class="data-table" id="topZonesTable">
-            <thead>
-              <tr>
-                <th>Zone</th>
-                <th>Trips</th>
-                <th>Revenue</th>
-              </tr>
-            </thead>
-            <tbody id="topZonesTableBody">
-              <tr><td colspan="3" class="data-table__empty">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel panel--half">
-        <div class="panel__header">
-          <h2>Borough Rankings</h2>
-          <span class="panel__hint">Revenue is dataset-wide · tip%, trip length, and speed reflect the currently loaded trips</span>
-        </div>
-        <ul class="rankings-list" id="boroughRankingsList">
+      <div class="peak-hours">
+        <h3 class="peak-hours__title">Peak Hours</h3>
+        <ul class="rankings-list" id="peakHoursList">
           <li class="ranking-item">
-            <span class="ranking-item__label">Highest Revenue</span>
-            <span class="ranking-item__value" data-rank="highestRevenue" data-skeleton>—</span>
-          </li>
-          <li class="ranking-item">
-            <span class="ranking-item__label">Highest Tip %</span>
-            <span class="ranking-item__value" data-rank="highestTipPct" data-skeleton>—</span>
-          </li>
-          <li class="ranking-item">
-            <span class="ranking-item__label">Longest Avg Trip</span>
-            <span class="ranking-item__value" data-rank="longestAvgTrip" data-skeleton>—</span>
-          </li>
-          <li class="ranking-item">
-            <span class="ranking-item__label">Fastest Avg Speed</span>
-            <span class="ranking-item__value" data-rank="fastestAvgSpeed" data-skeleton>—</span>
+            <span class="ranking-item__label">—</span>
+            <span class="ranking-item__value" data-skeleton>—</span>
           </li>
         </ul>
-      </div>
-    </section>
-
-    <!-- ============ TRAFFIC EFFICIENCY ANALYSIS ============ -->
-    <section class="panel">
-      <div class="panel__header">
-        <h2>Traffic Efficiency Analysis</h2>
-        <span class="panel__hint">Speed vs fare-per-mile · click legend to isolate a borough</span>
-      </div>
-      <div class="chart-wrap chart-wrap--wide">
-        <canvas id="efficiencyChart" role="img" aria-label="Trip speed versus fare per mile, colored by borough"></canvas>
-        <div class="chart-status" id="efficiencyChartStatus">Loading…</div>
-      </div>
-      <p class="insight" id="efficiencyInsight">Each point is one trip from the table below, plotted by speed (mph) against fare charged per mile, colored by pickup borough.</p>
-    </section>
-
-    <!-- ============ DATA QUALITY / EXCLUSIONS ============ -->
-    <section class="panel">
-      <div class="panel__header">
-        <h2>Data Quality — Excluded Records</h2>
-        <span class="panel__hint" id="exclusionsCount">Loading…</span>
-      </div>
-      <details class="exclusions">
-        <summary>Show exclusion log</summary>
-        <div class="table-scroll table-scroll--short">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Source file</th>
-                <th>Row</th>
-                <th>Reason</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody id="exclusionsTableBody">
-              <tr><td colspan="4" class="data-table__empty">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </details>
-    </section>
-
-    <!-- ============ TRIPS TABLE ============ -->
-    <section class="panel">
-      <div class="panel__header">
-        <h2>Trip Explorer</h2>
-        <span class="panel__hint">Click a column to sort (Tip/Total sort only the current page) · click a row for full detail</span>
-      </div>
-
-      <div class="table-toolbar">
-        <span id="tripsResultCount" class="table-toolbar__count"></span>
-        <label class="field field--inline">
-          <span>Rows per page</span>
-          <select id="perPageSelect">
-            <option value="25">25</option>
-            <option value="50" selected>50</option>
-            <option value="100">100</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="table-scroll">
-        <table class="data-table" id="tripsTable">
-          <thead>
-            <tr>
-              <th data-key="pickup_datetime" class="sortable">Pickup</th>
-              <th data-key="dropoff_datetime" class="sortable">Dropoff</th>
-              <th data-key="pickup_borough">Pickup Zone</th>
-              <th data-key="dropoff_borough">Dropoff Zone</th>
-              <th data-key="trip_distance" class="sortable">Distance (mi)</th>
-              <th data-key="trip_duration_minutes" class="sortable">Duration (min)</th>
-              <th data-key="fare_amount" class="sortable">Fare ($)</th>
-              <th data-key="tip_amount" class="sortable">Tip ($)</th>
-              <th data-key="total_amount" class="sortable">Total ($)</th>
-              <th data-key="speed_mph" class="sortable">Speed (mph)</th>
-              <th data-key="passenger_count" class="sortable">Pax</th>
-            </tr>
-          </thead>
-          <tbody id="tripsTableBody">
-            <tr><td colspan="11" class="data-table__empty">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="pagination">
-        <button id="prevPageBtn" class="btn btn--ghost" disabled>← Prev</button>
-        <span id="pageInfo" class="pagination__info">Page 1</span>
-        <button id="nextPageBtn" class="btn btn--ghost" disabled>Next →</button>
       </div>
     </section>
 
@@ -341,19 +138,6 @@
   <footer class="app-footer">
     <span>Data: NYC TLC Trip Records · Built for the Urban Mobility Explorer assignment</span>
   </footer>
-
-  <!-- ============ TRIP DETAIL MODAL ============ -->
-  <div class="modal-overlay" id="tripModalOverlay" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tripModalTitle">
-      <div class="modal__header">
-        <h3 id="tripModalTitle">Trip Detail</h3>
-        <button class="modal__close" id="tripModalClose" aria-label="Close">✕</button>
-      </div>
-      <div class="modal__body" id="tripModalBody">
-        Loading…
-      </div>
-    </div>
-  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="js/api.js" defer></script>

@@ -391,8 +391,6 @@ button, input, select {
   height: clamp(220px, 30vh, 340px);
 }
 
-.chart-wrap--wide { height: clamp(240px, 34vh, 380px); }
-
 .chart-status {
   position: absolute;
   inset: 0;
@@ -409,199 +407,6 @@ button, input, select {
 .chart-status.is-hidden { display: none; }
 
 .chart-status.is-error { color: var(--red); }
-
-/* ===================================================================
-   TABLES
-   =================================================================== */
-
-.table-scroll {
-  overflow-x: auto;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-}
-
-.table-scroll--short { max-height: min(260px, 32vh); overflow-y: auto; }
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  font-family: var(--font-mono);
-}
-
-.data-table thead th {
-  position: sticky;
-  top: 0;
-  background: var(--surface-soft);
-  text-align: left;
-  padding: 10px 12px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-dim);
-  font-weight: 700;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.data-table th.sortable {
-  cursor: pointer;
-  user-select: none;
-}
-
-.data-table th.sortable:hover { color: var(--wine); }
-
-.data-table th.sortable::after {
-  content: "↕";
-  opacity: 0.35;
-  margin-left: 5px;
-  font-size: 10px;
-}
-
-.data-table th.sort-asc::after { content: "↑"; opacity: 1; color: var(--wine); }
-.data-table th.sort-desc::after { content: "↓"; opacity: 1; color: var(--wine); }
-
-.data-table tbody td {
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--border-soft);
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.data-table tbody tr {
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-
-.data-table tbody tr:hover { background: var(--surface-soft); }
-
-.data-table__empty {
-  text-align: center;
-  color: var(--text-faint);
-  padding: 24px;
-  cursor: default;
-}
-
-.table-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 12.5px;
-  color: var(--text-dim);
-}
-
-.table-toolbar__count { font-family: var(--font-mono); }
-
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  margin-top: 14px;
-}
-
-.pagination__info {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-dim);
-}
-
-/* Status-style badges for use inside table cells (Low / Out-of-Stock style
-   indicators) — wired up the same way the original used colored dots. */
-.status-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-}
-
-.status-dot::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.status-dot--ok { color: var(--green); }
-.status-dot--warn { color: var(--amber); }
-.status-dot--bad { color: var(--red); }
-
-/* ===================================================================
-   KEY INSIGHTS
-   =================================================================== */
-
-.insights-panel .panel__header { margin-bottom: 10px; }
-
-.insights-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 10px 22px;
-}
-
-.insights-list li {
-  position: relative;
-  padding-left: 20px;
-  font-size: 13.5px;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.insights-list li::before {
-  content: "▸";
-  position: absolute;
-  left: 0;
-  top: 0;
-  color: var(--wine);
-  font-weight: 700;
-}
-
-.insights-list strong {
-  font-family: var(--font-mono);
-  color: var(--wine);
-  font-weight: 600;
-}
-
-/* ===================================================================
-   ADVANCED FILTERS
-   =================================================================== */
-
-.advanced-filters {
-  grid-column: 1 / -1;
-  margin-top: 6px;
-  border-top: 1px dashed var(--border-soft);
-  padding-top: 12px;
-}
-
-.advanced-filters summary {
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-dim);
-  list-style: none;
-}
-
-.advanced-filters summary::-webkit-details-marker { display: none; }
-
-.advanced-filters summary::before {
-  content: "▸";
-  display: inline-block;
-  margin-right: 6px;
-  color: var(--wine);
-  transition: transform 0.15s ease;
-}
-
-.advanced-filters[open] summary::before { transform: rotate(90deg); }
-
-.advanced-filters summary:hover { color: var(--wine); }
-
-.filters__grid--advanced {
-  margin-top: 14px;
-}
 
 /* ===================================================================
    HERO PANEL (centerpiece chart)
@@ -625,38 +430,24 @@ button, input, select {
   height: clamp(320px, 42vh, 460px);
 }
 
-.segmented {
-  display: inline-flex;
-  background: var(--surface-soft);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 3px;
-  gap: 2px;
-}
-
-.segmented__btn {
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.segmented__btn:hover { color: var(--wine); }
-
-.segmented__btn.is-active {
-  background: var(--wine);
-  color: #fff;
-}
-
 /* ===================================================================
-   BOROUGH RANKINGS
+   PEAK HOURS
    =================================================================== */
+
+.peak-hours {
+  margin-top: 18px;
+  border-top: 1px dashed var(--border-soft);
+  padding-top: 14px;
+}
+
+.peak-hours__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  font-weight: 700;
+  margin: 0 0 6px;
+}
 
 .rankings-list {
   list-style: none;
