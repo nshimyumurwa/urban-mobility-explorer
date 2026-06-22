@@ -19,7 +19,7 @@ A fullstack web application that processes, stores, and visualizes New York City
 
 ## Video Walkthrough
 
-Watch the 5-minute project demo here: [insert link after recording]
+Watch the 5-minute project demo here: https://youtu.be/hAqCF2pQTZg
 
 ---
 
