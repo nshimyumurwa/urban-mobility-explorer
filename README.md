@@ -73,22 +73,29 @@ pip install -r backend/requirements.txt
 
 ### Step 3: Download the dataset
 
-Download the following files from the NYC Taxi and Limousine Commission website and place them inside the data/ folder:
+Run the downloader script from the project root:
 
-- yellow_tripdata_2019-01.parquet
-- taxi_zone_lookup.csv (already included in the repository)
-- taxi_zones folder (already included in the repository)
+```bash
+python backend/download_tlc_data.py --year 2019 --month 1
+```
+
+This downloads:
+
+- `yellow_tripdata_2019-01.parquet`
+- `taxi_zone_lookup.csv`
+- `taxi_zones.zip`
+
+All files are saved into [data/](./data/).
 
 NYC TLC data source: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
 
-### Step 4: Run the data pipeline
+### Step 4: Run the data cleaning pipeline
 
 ```bash
-cd backend
-py data_pipeline.py
+python backend/data_pipeline.py
 ```
 
-This script loads the raw trip data, removes missing values and outliers, engineers three derived features, and loads the cleaned data into a local SQLite database.
+This script loads `.parquet` trip data, removes missing values/duplicates/outliers, engineers three derived features, logs excluded records, and loads cleaned data into local SQLite.
 
 ### Step 5: Start the backend server
 
@@ -149,11 +156,24 @@ The data pipeline calculates three additional columns from the raw data:
 
 ## Database Design
 
-The database uses three tables:
+The project includes two normalized schema definitions for Part 1:
 
-- zones: contains the 265 official NYC taxi zones mapped to their boroughs and service areas
-- trips: stores all cleaned and enriched trip records including the derived features
-- exclusion_log: records every row that was removed during cleaning, along with the reason for exclusion
+- SQLite: [schema_sqlite_normalized.sql](./database/schema_sqlite_normalized.sql)
+- PostgreSQL: [schema_postgres_normalized.sql](./database/schema_postgres_normalized.sql)
+
+These are proposed schemas; the current pipeline still loads the existing
+[schema.sql](./database/schema.sql). Loading into the normalized tables is not
+implemented yet. Both normalized scripts drop existing tables, so run them only
+against a separate, disposable database.
+
+Both schemas use:
+
+- `zones` (dimension table for location metadata)
+- `vendors`, `rate_codes`, `payment_types` (dimension tables for categorical IDs)
+- `trips` (core trip fact table)
+- `trip_fares` (1:1 fare/tax breakdown per trip)
+- `trip_metrics` (1:1 derived metrics per trip)
+- `exclusion_log` (cleaning transparency/audit trail)
 
 ---
 
