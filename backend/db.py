@@ -3,7 +3,7 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, 'database', 'mobility.db')
-SCHEMA_PATH = os.path.join(BASE_DIR, 'database', 'schema.sql')
+SCHEMA_PATH = os.path.join(BASE_DIR, 'database', 'schema_sqlite_normalized.sql')
 
 SCHEMA = {
     "zones": {
@@ -13,17 +13,41 @@ SCHEMA = {
     },
     "trips": {
         "columns": [
-            "id", "pickup_datetime", "dropoff_datetime", "passenger_count",
+            "trip_id", "vendor_id", "rate_code_id", "payment_type_id",
+            "store_and_fwd_flag", "pickup_datetime", "dropoff_datetime", "passenger_count",
             "trip_distance", "pickup_location_id", "dropoff_location_id",
-            "fare_amount", "tip_amount", "total_amount",
-            "trip_duration_minutes", "fare_per_mile", "speed_mph"
         ],
-        "primary_key": "id",
+        "primary_key": "trip_id",
         "foreign_keys": {
             "pickup_location_id": "zones(location_id)",
-            "dropoff_location_id": "zones(location_id)"
+            "dropoff_location_id": "zones(location_id)",
+            "vendor_id": "vendors(vendor_id)",
+            "rate_code_id": "rate_codes(rate_code_id)",
+            "payment_type_id": "payment_types(payment_type_id)"
         },
-        "description": "Individual taxi trips with derived metrics like duration, fare_per_mile, and speed_mph"
+        "description": "Core trip records referencing categorical dimensions"
+    },
+    "vendors": {
+        "columns": ["vendor_id", "vendor_name"], "primary_key": "vendor_id"
+    },
+    "rate_codes": {
+        "columns": ["rate_code_id", "rate_code_name"], "primary_key": "rate_code_id"
+    },
+    "payment_types": {
+        "columns": ["payment_type_id", "payment_type_name"], "primary_key": "payment_type_id"
+    },
+    "trip_fares": {
+        "columns": ["trip_id", "fare_amount", "extra", "mta_tax", "tip_amount",
+                    "tolls_amount", "improvement_surcharge", "congestion_surcharge",
+                    "airport_fee", "total_amount"],
+        "primary_key": "trip_id",
+        "foreign_keys": {"trip_id": "trips(trip_id)"}
+    },
+    "trip_metrics": {
+        "columns": ["trip_id", "trip_duration_minutes", "fare_per_mile",
+                    "speed_mph", "pickup_hour", "pickup_weekday"],
+        "primary_key": "trip_id",
+        "foreign_keys": {"trip_id": "trips(trip_id)"}
     },
     "exclusion_log": {
         "columns": ["id", "filename", "row_index", "reason", "details", "created_at"],
@@ -36,18 +60,32 @@ SCHEMA = {
 def get_db_connection():
     """Return a SQLite connection with Row factory."""
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def initialize_connection(conn):
+    """Create normalized tables without replacing an existing flat database."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(trips)")}
+    if columns and 'trip_id' not in columns:
+        raise RuntimeError(
+            "Legacy flat database detected. Run python backend/data_pipeline.py "
+            "to rebuild from raw data; the existing database will be backed up."
+        )
+    with open(SCHEMA_PATH, encoding='utf-8') as f:
+        conn.executescript(f.read())
+
+
 def init_db():
-    """Initialize the database from schema.sql if it doesn't exist or is empty."""
+    """Initialize the normalized SQLite database without deleting data."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    with open(SCHEMA_PATH, 'r') as f:
-        conn.executescript(f.read())
-    conn.commit()
-    conn.close()
+    try:
+        initialize_connection(conn)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_table_counts():
@@ -76,10 +114,14 @@ def table_exists(table_name):
 
 
 def is_db_ready():
-    """Check if all schema tables exist and have data."""
+    """Check that the normalized tables and API view exist."""
     if not os.path.exists(DB_PATH):
         return False
     conn = get_db_connection()
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(trips)")}
+    if 'trip_id' not in columns:
+        conn.close()
+        return False
     for table in SCHEMA.keys():
         cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -88,5 +130,8 @@ def is_db_ready():
         if cur.fetchone() is None:
             conn.close()
             return False
+    ready = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='view' AND name='trip_details'"
+    ).fetchone() is not None
     conn.close()
-    return True
+    return ready

@@ -82,7 +82,7 @@ def get_top_expensive_trips(n=10):
                t.passenger_count, t.fare_per_mile,
                pz.borough as pickup_borough,
                dz.borough as dropoff_borough
-        FROM trips t
+        FROM trip_details t
         LEFT JOIN zones pz ON t.pickup_location_id = pz.location_id
         LEFT JOIN zones dz ON t.dropoff_location_id = dz.location_id
         LIMIT 500
@@ -120,7 +120,7 @@ def get_cheapest_trips(n=10):
                t.passenger_count, t.fare_per_mile,
                pz.borough as pickup_borough,
                dz.borough as dropoff_borough
-        FROM trips t
+        FROM trip_details t
         LEFT JOIN zones pz ON t.pickup_location_id = pz.location_id
         LEFT JOIN zones dz ON t.dropoff_location_id = dz.location_id
         LIMIT 500
@@ -144,7 +144,7 @@ def benchmark(sample_size=100):
 
     rows = conn.execute(f'''
         SELECT fare_amount, trip_distance, trip_duration_minutes
-        FROM trips
+        FROM trip_details
         LIMIT {sample_size}
     ''').fetchall()
 
