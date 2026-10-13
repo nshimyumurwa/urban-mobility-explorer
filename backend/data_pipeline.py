@@ -1,330 +1,372 @@
-"""
-Data Pipeline for NYC TLC Trip Data
-------------------------------------
-Loads .parquet trip data, associates with zone lookups and spatial metadata,
-cleans/integrates data, derives features, and logs exclusions.
+"""Clean TLC records and load normalized SQLite tables with an exclusion audit."""
 
-Derived Features:
-1. trip_duration_minutes  – total trip time (informs congestion / route efficiency)
-2. fare_per_mile          – cost efficiency metric (identifies premium vs budget routes)
-3. speed_mph              – average speed (reveals traffic patterns by time/location)
-"""
+from __future__ import annotations
 
-import pandas as pd
-import numpy as np
-import sqlite3
-import os
-import json
+import argparse
+from contextlib import closing
 from datetime import datetime
+import glob
+import hashlib
+import json
+import os
+from pathlib import Path
+import sqlite3
+import tempfile
+from typing import Iterable, Optional
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, 'database', 'mobility.db')
-SCHEMA_PATH = os.path.join(BASE_DIR, 'database', 'schema.sql')
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
 
-ZONES_CSV = os.path.join(DATA_DIR, 'taxi_zone_lookup.csv')
-ZONES_GEOJSON_DIR = os.path.join(DATA_DIR, 'taxi_zones')
+if __package__:
+    from .db import DB_PATH, initialize_connection
+else:
+    from db import DB_PATH, initialize_connection
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / 'data'
+ZONES_CSV = DATA_DIR / 'taxi_zone_lookup.csv'
+ZONES_GEOJSON_DIR = DATA_DIR / 'taxi_zones'
+
+TRIP_COLUMNS = [
+    'vendor_id', 'pickup_datetime', 'dropoff_datetime', 'pickup_location_id',
+    'dropoff_location_id', 'rate_code_id', 'payment_type_id', 'passenger_count',
+    'trip_distance', 'store_and_fwd_flag',
+]
+FARE_COLUMNS = [
+    'fare_amount', 'extra', 'mta_tax', 'tip_amount', 'tolls_amount',
+    'improvement_surcharge', 'congestion_surcharge', 'airport_fee', 'total_amount',
+]
+METRIC_COLUMNS = [
+    'trip_duration_minutes', 'fare_per_mile', 'speed_mph', 'pickup_hour',
+    'pickup_weekday',
+]
+REQUIRED_COLUMNS = [
+    'pickup_datetime', 'dropoff_datetime', 'passenger_count', 'trip_distance',
+    'pickup_location_id', 'dropoff_location_id', 'fare_amount', 'total_amount',
+]
+EXCLUSION_COLUMNS = ['filename', 'row_index', 'reason', 'details']
+DIMENSIONS = {
+    'vendors': ('vendor_id', 'vendor_name', {
+        1: 'Creative Mobile Technologies', 2: 'VeriFone Inc.',
+    }),
+    'rate_codes': ('rate_code_id', 'rate_code_name', {
+        1: 'Standard rate', 2: 'JFK', 3: 'Newark', 4: 'Nassau or Westchester',
+        5: 'Negotiated fare', 6: 'Group ride', 99: 'Unknown',
+    }),
+    'payment_types': ('payment_type_id', 'payment_type_name', {
+        0: 'Unknown', 1: 'Credit card', 2: 'Cash', 3: 'No charge',
+        4: 'Dispute', 5: 'Unknown', 6: 'Voided trip',
+    }),
+}
 
 
-def get_parquet_paths():
-    """Find all yellow_tripdata .parquet files in the data directory."""
-    import glob
-    return sorted(glob.glob(os.path.join(DATA_DIR, 'yellow_tripdata_*.parquet')))
+def get_parquet_paths() -> list[str]:
+    return sorted(glob.glob(str(DATA_DIR / 'yellow_tripdata_*.parquet')))
 
 
-def load_zone_lookup():
-    """Load and standardize the taxi zone lookup CSV."""
-    df = pd.read_csv(ZONES_CSV)
+def load_zone_lookup() -> pd.DataFrame:
+    df = pd.read_csv(ZONES_CSV, keep_default_na=False, na_values=[''])
     df.columns = [c.lower() for c in df.columns]
     df = df.rename(columns={'locationid': 'location_id', 'servicezone': 'service_zone'})
-    df['location_id'] = df['location_id'].astype(int)
-    return df
+    ids = pd.to_numeric(df['location_id'], errors='raise')
+    if ids.isna().any() or (ids % 1 != 0).any() or ids.duplicated().any():
+        raise ValueError("Zone lookup must contain unique integer location IDs.")
+    if df[['borough', 'zone']].isna().any().any():
+        raise ValueError("Zone lookup contains missing borough or zone names.")
+    df['location_id'] = ids.astype(int)
+    return df[['location_id', 'borough', 'zone', 'service_zone']]
 
 
 def load_spatial_metadata():
-    """Load taxi_zones GeoJSON metadata if available."""
-    geojson_path = os.path.join(DATA_DIR, 'taxi_zones.geojson')
-    if os.path.exists(geojson_path):
-        with open(geojson_path, 'r') as f:
-            return json.load(f)
-    geojson_path = os.path.join(DATA_DIR, 'taxi_zones.json')
-    if os.path.exists(geojson_path):
-        with open(geojson_path, 'r') as f:
-            return json.load(f)
-
-    shapefiles = [f for f in os.listdir(ZONES_GEOJSON_DIR) if f.endswith('.shp')] \
-        if os.path.isdir(ZONES_GEOJSON_DIR) else []
+    for name in ('taxi_zones.geojson', 'taxi_zones.json'):
+        path = DATA_DIR / name
+        if path.exists():
+            with path.open(encoding='utf-8') as file:
+                return json.load(file)
+    shapefiles = list(ZONES_GEOJSON_DIR.glob('*.shp'))
     if shapefiles:
         try:
             import geopandas as gpd
-            gdf = gpd.read_file(os.path.join(ZONES_GEOJSON_DIR, shapefiles[0]))
-            return json.loads(gdf.to_json())
         except ImportError:
-            pass
-
+            print("Spatial polygons not loaded: geopandas is not installed. "
+                  "Zone lookup relationships will still be loaded.")
+            return None
+        return json.loads(gpd.read_file(shapefiles[0]).to_json())
     return None
 
 
+def iter_trip_batches(filepath, nrows=None, batch_size=100000):
+    offset = 0
+    for batch in pq.ParquetFile(filepath).iter_batches(batch_size=batch_size):
+        df = batch.to_pandas()
+        if nrows is not None:
+            df = df.head(nrows - offset)
+        df.index = pd.RangeIndex(offset, offset + len(df))
+        yield df
+        offset += len(df)
+        if nrows is not None and offset >= nrows:
+            break
+
+
 def load_trip_data(filepath, nrows=None):
-    """Load a .parquet trip file, returning a DataFrame."""
-    print(f"Loading: {os.path.basename(filepath)}")
-    df = pd.read_parquet(filepath)
-    if nrows:
-        df = df.head(nrows)
-    return df
+    frames = list(iter_trip_batches(filepath, nrows=nrows))
+    return pd.concat(frames) if frames else pd.DataFrame()
 
 
 def standardize_columns(df):
-    """Rename columns to lowercase/snake_case and keep relevant ones."""
+    df = df.copy()
     df.columns = [c.lower() for c in df.columns]
-    rename_map = {
+    return df.rename(columns={
         'tpep_pickup_datetime': 'pickup_datetime',
         'tpep_dropoff_datetime': 'dropoff_datetime',
         'pulocationid': 'pickup_location_id',
         'dolocationid': 'dropoff_location_id',
         'ratecodeid': 'rate_code_id',
-        'payment_type': 'payment_type',
+        'payment_type': 'payment_type_id',
         'vendorid': 'vendor_id',
-        'airport_fee': 'airport_fee',
-    }
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-    return df
+    })
 
 
-def clean_and_validate(df, filename="unknown", exclusion_log=None):
-    """
-    Clean the DataFrame: remove nulls, outliers, invalid records.
-    Returns (cleaned_df, exclusion_log).
-    """
-    if exclusion_log is None:
-        exclusion_log = []
+def clean_and_validate(
+    df: pd.DataFrame,
+    filename: str = "unknown",
+    exclusion_log: Optional[list[dict[str, object]]] = None,
+    valid_zone_ids: Optional[set[int]] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    missing = set(REQUIRED_COLUMNS) - set(df.columns)
+    if missing:
+        raise ValueError(f"{filename}: missing required columns: {sorted(missing)}")
+    df = df.copy()
+    excluded = [] if exclusion_log is None else list(exclusion_log)
 
-    total_rows = len(df)
-    excluded_rows = []
+    def exclude(mask, reason, details):
+        nonlocal df
+        for idx in df.index[mask]:
+            excluded.append({
+                'filename': filename, 'row_index': int(idx),
+                'reason': reason, 'details': details,
+            })
+        df = df.loc[~mask].copy()
 
-    def _exclude(idx, reason, details=""):
-        excluded_rows.append({
-            'filename': filename,
-            'row_index': int(idx) if pd.notna(idx) else None,
-            'reason': reason,
-            'details': str(details)[:200]
-        })
-
-    # --- 1. Missing values ---
-    required_cols = [
-        'pickup_datetime', 'dropoff_datetime',
-        'passenger_count', 'trip_distance',
-        'pickup_location_id', 'dropoff_location_id',
-        'fare_amount', 'total_amount'
-    ]
-    existing_required = [c for c in required_cols if c in df.columns]
-    null_mask = df[existing_required].isnull().any(axis=1)
-    null_indices = df.index[null_mask].tolist()
-    for idx in null_indices:
-        _exclude(idx, "missing_values", f"Null in required columns: {existing_required}")
-    df = df[~null_mask]
-
-    # --- 2. Duplicates ---
-    dup_cols = [c for c in ['pickup_datetime', 'dropoff_datetime', 'pickup_location_id',
-                             'dropoff_location_id', 'fare_amount', 'trip_distance']
-                if c in df.columns]
-    if dup_cols:
-        dup_mask = df.duplicated(subset=dup_cols, keep='first')
-        dup_indices = df.index[dup_mask].tolist()
-        for idx in dup_indices:
-            _exclude(idx, "duplicate", f"Duplicate on: {dup_cols}")
-        df = df[~dup_mask]
-
-    # --- 3. Outlier detection: fare_amount ---
-    for col, lo, hi in [
-        ('fare_amount', 0, 500),
-        ('trip_distance', 0, 100),
-        ('passenger_count', 1, 6),
-    ]:
+    exclude(df[REQUIRED_COLUMNS].isna().any(axis=1), 'missing_values',
+            'Null in a required field')
+    for col in TRIP_COLUMNS + FARE_COLUMNS:
         if col not in df.columns:
-            continue
-        mask = ~((df[col] > lo) & (df[col] <= hi))
-        outlier_indices = df.index[mask].tolist()
-        for idx in outlier_indices:
-            _exclude(idx, f"outlier_{col}", f"{col}={df.loc[idx, col]}, range=({lo}, {hi}]")
-        df = df[~mask]
+            df[col] = None
 
-    # --- 4. Temporal outliers ---
-    df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'], errors='coerce')
-    df['dropoff_datetime'] = pd.to_datetime(df['dropoff_datetime'], errors='coerce')
+    integers = [
+        'passenger_count', 'pickup_location_id', 'dropoff_location_id',
+        'vendor_id', 'rate_code_id', 'payment_type_id',
+    ]
+    for col in integers + ['trip_distance'] + FARE_COLUMNS:
+        raw = df[col]
+        numeric = pd.to_numeric(raw, errors='coerce')
+        invalid = raw.notna() & (numeric.isna() | ~np.isfinite(numeric))
+        exclude(invalid, 'invalid_numeric', f'{col} must be finite numeric data')
+        df[col] = numeric.loc[df.index]
+    for col in integers:
+        invalid = df[col].notna() & ((df[col] % 1 != 0) | (df[col] < 0))
+        exclude(invalid, 'invalid_identifier', f'{col} must be a nonnegative integer')
+    for col, lo, hi in [('fare_amount', 0, 500), ('trip_distance', 0, 100)]:
+        exclude(~((df[col] > lo) & (df[col] <= hi)),
+                f'outlier_{col}', f'{col} must be in ({lo}, {hi}]')
+    exclude(~df['passenger_count'].between(1, 6), 'outlier_passenger_count',
+            'passenger_count must be an integer in [1, 6]')
+    for col in FARE_COLUMNS:
+        exclude(df[col].notna() & (df[col] < 0), 'negative_amount',
+                f'{col} cannot be negative')
+    exclude(df['total_amount'] < df['fare_amount'], 'invalid_total_amount',
+            'total_amount cannot be less than fare_amount')
+    if valid_zone_ids is not None:
+        for col in ['pickup_location_id', 'dropoff_location_id']:
+            exclude(~df[col].isin(valid_zone_ids), 'unknown_zone',
+                    f'{col} is not in the zone lookup')
+    flag = df['store_and_fwd_flag'].astype('string').str.strip().str.upper()
+    exclude(flag.notna() & ~flag.isin(['Y', 'N']), 'invalid_category',
+            'store_and_fwd_flag must be Y, N, or missing')
+    df['store_and_fwd_flag'] = flag.loc[df.index]
 
-    time_null = df['pickup_datetime'].isnull() | df['dropoff_datetime'].isnull()
-    for idx in df.index[time_null].tolist():
-        _exclude(idx, "invalid_datetime", "Could not parse datetime")
-    df = df[~time_null]
-
-    dropoff_before_pickup = df['dropoff_datetime'] <= df['pickup_datetime']
-    for idx in df.index[dropoff_before_pickup].tolist():
-        _exclude(idx, "negative_duration",
-                 f"dropoff={df.loc[idx, 'dropoff_datetime']}, pickup={df.loc[idx, 'pickup_datetime']}")
-    df = df[~dropoff_before_pickup]
-
-    # --- 5. Duration outliers ---
-    duration_minutes = (df['dropoff_datetime'] - df['pickup_datetime']).dt.total_seconds() / 60
-    duration_mask = (duration_minutes <= 0) | (duration_minutes > 360)
-    for idx in df.index[duration_mask].tolist():
-        _exclude(idx, "outlier_duration",
-                 f"duration_minutes={duration_minutes.loc[idx]:.1f}, valid=(0, 360]")
-    df = df[~duration_mask]
-
-    # --- 6. IQR-based fare/distance ratio outliers ---
-    ratio = df['fare_amount'] / df['trip_distance'].replace(0, np.nan)
-    Q1 = ratio.quantile(0.01)
-    Q3 = ratio.quantile(0.99)
-    IQR = Q3 - Q1
-    ratio_mask = (ratio < (Q1 - 1.5 * IQR)) | (ratio > (Q3 + 1.5 * IQR))
-    for idx in df.index[ratio_mask].tolist():
-        _exclude(idx, "outlier_fare_per_distance",
-                 f"fare/distance={ratio.loc[idx]:.2f}, IQR bounds=({Q1 - 1.5*IQR:.2f}, {Q3 + 1.5*IQR:.2f})")
-    df = df[~ratio_mask]
-
-    exclusions = pd.DataFrame(excluded_rows) if excluded_rows else pd.DataFrame()
-    print(f"  Total rows     : {total_rows}")
-    print(f"  Excluded rows  : {len(excluded_rows)}")
-    print(f"  Remaining rows : {len(df)}")
-    if not exclusions.empty:
-        print(f"  Exclusion breakdown:")
-        print(exclusions['reason'].value_counts().to_string())
-
-    return df, exclusions
+    # TLC timestamps are New York local wall times, not UTC timestamps.
+    for col in ['pickup_datetime', 'dropoff_datetime']:
+        df[col] = pd.to_datetime(df[col], errors='coerce', format='mixed')
+        if isinstance(df[col].dtype, pd.DatetimeTZDtype):
+            raise ValueError(f'{filename}: expected timezone-naive TLC local times')
+    exclude(df[['pickup_datetime', 'dropoff_datetime']].isna().any(axis=1),
+            'invalid_datetime', 'Timestamp could not be parsed')
+    duration = (df['dropoff_datetime'] - df['pickup_datetime']).dt.total_seconds() / 60
+    exclude((duration <= 0) | (duration > 360), 'outlier_duration',
+            'Duration must be in (0, 360] minutes')
+    speed = df['trip_distance'] / (duration.loc[df.index] / 60)
+    exclude(speed > 120, 'outlier_speed', 'Average speed exceeds 120 mph')
+    exclude(df.duplicated(subset=TRIP_COLUMNS + FARE_COLUMNS), 'duplicate',
+            'Duplicate normalized trip and fare values')
+    return df, pd.DataFrame(excluded, columns=EXCLUSION_COLUMNS)
 
 
 def engineer_features(df):
-    """
-    Add derived features to the DataFrame.
-
-    Feature 1: trip_duration_minutes
-        - Total elapsed time from pickup to dropoff.
-        - Why: Core metric for congestion analysis, route efficiency, and pricing.
-
-    Feature 2: fare_per_mile
-        - Total fare divided by distance.
-        - Why: Reveals cost efficiency — high values indicate short premium trips
-          (e.g., airport runs), low values indicate long budget trips.
-
-    Feature 3: speed_mph
-        - Average speed (trip_distance / duration in hours).
-        - Why: Proxy for traffic congestion; lower speeds = dense urban / rush hour,
-          higher speeds = highway / late-night.
-    """
-    df['trip_duration_minutes'] = round(
-        (df['dropoff_datetime'] - df['pickup_datetime']).dt.total_seconds() / 60, 2
-    )
-
-    df['fare_per_mile'] = round(
-        df['fare_amount'] / df['trip_distance'].replace(0, np.nan), 2
-    )
-
-    df['speed_mph'] = round(
-        df['trip_distance'] / (df['trip_duration_minutes'] / 60), 2
-    )
-    df['speed_mph'] = df['speed_mph'].fillna(0).clip(0, 120)
-
+    df = df.copy()
+    duration = (df['dropoff_datetime'] - df['pickup_datetime']).dt.total_seconds() / 60
+    df['trip_duration_minutes'] = duration
+    df['fare_per_mile'] = df['fare_amount'] / df['trip_distance']
+    df['speed_mph'] = df['trip_distance'] / (duration / 60)
+    df['pickup_hour'] = df['pickup_datetime'].dt.hour
+    df['pickup_weekday'] = df['pickup_datetime'].dt.weekday
     return df
 
 
 def normalize_for_db(df):
-    """Normalize data types for SQLite storage."""
-    df['pickup_datetime'] = df['pickup_datetime'].astype(str)
-    df['dropoff_datetime'] = df['dropoff_datetime'].astype(str)
-    numeric_cols = [
-        'passenger_count', 'trip_distance', 'fare_amount',
-        'tip_amount', 'total_amount', 'trip_duration_minutes',
-        'fare_per_mile', 'speed_mph', 'pickup_location_id', 'dropoff_location_id'
-    ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    df = df.copy()
+    for col in ['pickup_datetime', 'dropoff_datetime']:
+        df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+    for col in ['passenger_count', 'pickup_location_id', 'dropoff_location_id',
+                'vendor_id', 'rate_code_id', 'payment_type_id',
+                'pickup_hour', 'pickup_weekday']:
+        df[col] = df[col].astype('Int64')
     return df
 
 
 def get_trip_columns():
-    """Return the columns inserted into the trips table (matches schema)."""
-    return [
-        'pickup_datetime', 'dropoff_datetime', 'passenger_count',
-        'trip_distance', 'pickup_location_id', 'dropoff_location_id',
-        'fare_amount', 'tip_amount', 'total_amount',
-        'trip_duration_minutes', 'fare_per_mile', 'speed_mph'
-    ]
+    return list(TRIP_COLUMNS)
 
 
-def run_pipeline(parquet_paths=None, nrows=None):
-    """
-    Run the full pipeline: load, clean, feature-engineer, and insert.
+def sql_rows(df, columns):
+    return df[columns].astype(object).where(df[columns].notna(), None).itertuples(
+        index=False, name=None
+    )
 
-    If parquet_paths is None, auto-detect parquet files in data/.
-    If none found, falls back to synthetic data.
-    """
-    from db import init_db, get_db_connection
 
+def load_zones(conn, zones):
+    conn.executemany(
+        'INSERT INTO zones (location_id, borough, zone, service_zone) VALUES (?, ?, ?, ?)',
+        sql_rows(zones, ['location_id', 'borough', 'zone', 'service_zone']),
+    )
+
+
+def insert_cleaned_trips(conn, df, filename):
+    """Insert related rows with matching IDs; detect duplicates across all files."""
+    for table, (id_col, name_col, labels) in DIMENSIONS.items():
+        ids = [int(value) for value in df[id_col].dropna().unique()]
+        conn.executemany(
+            f'INSERT OR IGNORE INTO {table} ({id_col}, {name_col}) VALUES (?, ?)',
+            [(value, labels.get(value, f'Unmapped TLC code {value}')) for value in ids],
+        )
+    conn.execute('CREATE TEMP TABLE IF NOT EXISTS seen_trips (signature BLOB PRIMARY KEY)')
+    columns = TRIP_COLUMNS + FARE_COLUMNS + METRIC_COLUMNS
+    accepted = []
+    exclusions = []
+    for idx, row in zip(df.index, sql_rows(df, columns)):
+        signature = hashlib.sha256(
+            json.dumps(row[:len(TRIP_COLUMNS) + len(FARE_COLUMNS)],
+                       separators=(',', ':'), allow_nan=False).encode()
+        ).digest()
+        cursor = conn.execute('INSERT OR IGNORE INTO seen_trips VALUES (?)', (signature,))
+        if cursor.rowcount == 0:
+            exclusions.append((filename, int(idx), 'duplicate',
+                               'Duplicate normalized record across batches/files'))
+        else:
+            accepted.append(row)
+    next_id = conn.execute('SELECT COALESCE(MAX(trip_id), 0) + 1 FROM trips').fetchone()[0]
+    for table, fields, offset in [
+        ('trips', TRIP_COLUMNS, 0),
+        ('trip_fares', FARE_COLUMNS, len(TRIP_COLUMNS)),
+        ('trip_metrics', METRIC_COLUMNS, len(TRIP_COLUMNS) + len(FARE_COLUMNS)),
+    ]:
+        names = ', '.join(['trip_id'] + fields)
+        placeholders = ', '.join('?' for _ in range(len(fields) + 1))
+        conn.executemany(
+            f'INSERT INTO {table} ({names}) VALUES ({placeholders})',
+            ((next_id + i,) + row[offset:offset + len(fields)]
+             for i, row in enumerate(accepted)),
+        )
+    conn.executemany(
+        'INSERT INTO exclusion_log (filename, row_index, reason, details) VALUES (?, ?, ?, ?)',
+        exclusions,
+    )
+    return len(accepted)
+
+
+def backup_database(path):
+    backup_path = path.with_name(
+        f'{path.name}.{datetime.now().strftime("%Y%m%dT%H%M%S%f")}.bak'
+    )
+    with closing(sqlite3.connect(path)) as source:
+        with closing(sqlite3.connect(backup_path)) as destination:
+            source.backup(destination)
+    print(f'Previous database backed up to {backup_path}')
+
+
+def run_pipeline(
+    parquet_paths: Optional[Iterable[os.PathLike[str] | str]] = None,
+    nrows: Optional[int] = None,
+    db_path: Optional[os.PathLike[str] | str] = None,
+    batch_size: int = 100000,
+) -> dict[str, int]:
+    """Build a database atomically; on failure keep the previous database intact."""
+    if nrows is not None and nrows <= 0:
+        raise ValueError('nrows must be positive')
+    if batch_size <= 0:
+        raise ValueError('batch_size must be positive')
+    paths = get_parquet_paths() if parquet_paths is None else list(parquet_paths)
+    if not paths:
+        raise FileNotFoundError('No TLC Parquet files found. Run backend/download_tlc_data.py first.')
+    for path in paths:
+        if not Path(path).is_file():
+            raise FileNotFoundError(path)
     zones = load_zone_lookup()
     spatial = load_spatial_metadata()
-
     if spatial:
         print(f"Loaded spatial metadata: {len(spatial.get('features', []))} zones")
-    print(f"Loaded zone lookup: {len(zones)} zones")
+    target = Path(DB_PATH if db_path is None else db_path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='mobility-build-', suffix='.db', dir=target.parent)
+    os.close(fd)
+    staging = Path(name)
+    total = 0
+    try:
+        with closing(sqlite3.connect(staging)) as conn:
+            initialize_connection(conn)
+            with conn:
+                load_zones(conn, zones)
+                zone_ids = set(zones['location_id'])
+                for path in paths:
+                    filename = Path(path).name
+                    print(f'Loading {filename}' + (f' (up to {nrows} rows)' if nrows else ''))
+                    for raw in iter_trip_batches(path, nrows, batch_size):
+                        df, exclusions = clean_and_validate(
+                            standardize_columns(raw), filename, valid_zone_ids=zone_ids
+                        )
+                        df = normalize_for_db(engineer_features(df))
+                        total += insert_cleaned_trips(conn, df, filename)
+                        conn.executemany(
+                            'INSERT INTO exclusion_log (filename, row_index, reason, details) '
+                            'VALUES (?, ?, ?, ?)',
+                            sql_rows(exclusions, EXCLUSION_COLUMNS),
+                        )
+                if conn.execute('PRAGMA foreign_key_check').fetchall():
+                    raise RuntimeError('Normalized database has foreign key violations')
+            excluded = conn.execute('SELECT COUNT(*) FROM exclusion_log').fetchone()[0]
+            counts = [conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                      for table in ['trips', 'trip_fares', 'trip_metrics', 'trip_details']]
+            if counts != [total] * 4:
+                raise RuntimeError(f'Incomplete normalized trip relationships: {counts}')
+        if target.exists():
+            backup_database(target)
+        os.replace(staging, target)
+    finally:
+        staging.unlink(missing_ok=True)
+    print(f'Pipeline complete: {total} trips, {excluded} excluded, {len(zones)} zones.')
+    return {'zones': len(zones), 'trips': total, 'excluded': excluded}
 
-    all_exclusions = []
-    total_trips = 0
 
-    if parquet_paths is None:
-        parquet_paths = get_parquet_paths()
-
-    init_db()
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    # Clear existing data
-    conn.execute("DELETE FROM trips")
-    conn.execute("DELETE FROM exclusion_log")
-
-    # Insert zones fresh
-    zones.to_sql('zones', conn, if_exists='replace', index=False)
-
-    if parquet_paths:
-        for fpath in parquet_paths:
-            try:
-                df = load_trip_data(fpath, nrows=nrows)
-            except Exception as e:
-                print(f"  Error loading {fpath}: {e}")
-                continue
-
-            df = standardize_columns(df)
-            df, exclusions = clean_and_validate(df, os.path.basename(fpath))
-            df = engineer_features(df)
-            df = normalize_for_db(df)
-
-            cols = get_trip_columns()
-            rows = df[cols].to_numpy().tolist()
-            placeholders = ", ".join(["?"] * len(cols))
-            col_names = ", ".join(cols)
-            conn.executemany(
-                f"INSERT INTO trips ({col_names}) VALUES ({placeholders})",
-                rows
-            )
-            total_trips += len(df)
-            all_exclusions.append(exclusions)
-    else:
-        print("No parquet files found. Use seed_database() for synthetic data.")
-
-    # Save exclusion log
-    if all_exclusions:
-        excl_df = pd.concat(all_exclusions, ignore_index=True)
-        excl_df.to_sql('exclusion_log', conn, if_exists='append', index=False)
-        print(f"\nTotal records excluded: {len(excl_df)}")
-        print(f"Exclusions saved to exclusion_log table.")
-
-    conn.commit()
-    conn.close()
-
-    print(f"\nPipeline complete. {total_trips} trips inserted.")
-    return {"zones": len(zones), "trips": total_trips}
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--nrows', type=int, help='Limit raw rows per file (sample run)')
+    parser.add_argument('--batch-size', type=int, default=100000)
+    parser.add_argument('--db-path', default=DB_PATH)
+    args = parser.parse_args()
+    run_pipeline(nrows=args.nrows, db_path=args.db_path, batch_size=args.batch_size)
 
 
 if __name__ == '__main__':
-    run_pipeline()
+    main()

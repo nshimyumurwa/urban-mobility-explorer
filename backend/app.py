@@ -108,7 +108,7 @@ def get_trips():
         SELECT t.*,
                pz.borough as pickup_borough, pz.zone as pickup_zone,
                dz.borough as dropoff_borough, dz.zone as dropoff_zone
-        FROM trips t
+        FROM trip_details t
         LEFT JOIN zones pz ON t.pickup_location_id = pz.location_id
         LEFT JOIN zones dz ON t.dropoff_location_id = dz.location_id
         WHERE 1=1
@@ -194,7 +194,7 @@ def get_trip(trip_id):
         SELECT t.*,
                pz.borough as pickup_borough, pz.zone as pickup_zone,
                dz.borough as dropoff_borough, dz.zone as dropoff_zone
-        FROM trips t
+        FROM trip_details t
         LEFT JOIN zones pz ON t.pickup_location_id = pz.location_id
         LEFT JOIN zones dz ON t.dropoff_location_id = dz.location_id
         WHERE t.id = ?
@@ -220,7 +220,7 @@ def get_summary():
             ROUND(MAX(fare_amount), 2) as max_fare,
             ROUND(MIN(trip_distance), 2) as min_distance,
             ROUND(MAX(trip_distance), 2) as max_distance
-        FROM trips
+        FROM trip_details
     ''').fetchone()
     conn.close()
     return jsonify(dict(stats))
@@ -237,7 +237,7 @@ def summary_by_borough():
             ROUND(SUM(t.fare_amount), 2) as total_fare,
             ROUND(AVG(t.trip_distance), 2) as avg_distance,
             ROUND(AVG(t.trip_duration_minutes), 2) as avg_duration
-        FROM trips t
+        FROM trip_details t
         LEFT JOIN zones pz ON t.pickup_location_id = pz.location_id
         WHERE pz.borough IS NOT NULL
         GROUP BY pz.borough
@@ -257,7 +257,7 @@ def summary_by_hour():
             ROUND(AVG(fare_amount), 2) as avg_fare,
             ROUND(SUM(fare_amount), 2) as total_fare,
             ROUND(AVG(trip_distance), 2) as avg_distance
-        FROM trips
+        FROM trip_details
         GROUP BY hour
         ORDER BY hour
     ''').fetchall()
@@ -283,7 +283,7 @@ def summary_by_time_of_day():
             ROUND(AVG(fare_amount), 2) as avg_fare,
             ROUND(SUM(fare_amount), 2) as total_fare,
             ROUND(AVG(trip_distance), 2) as avg_distance
-        FROM trips
+        FROM trip_details
         GROUP BY time_of_day
         ORDER BY
             CASE time_of_day
@@ -309,7 +309,7 @@ def summary_by_zone():
             ROUND(AVG(t.fare_amount), 2) as avg_fare,
             ROUND(SUM(t.fare_amount), 2) as total_fare,
             ROUND(AVG(t.trip_distance), 2) as avg_distance
-        FROM trips t
+        FROM trip_details t
         LEFT JOIN zones pz ON t.pickup_location_id = pz.location_id
         WHERE pz.zone IS NOT NULL
         GROUP BY pz.zone, pz.borough
