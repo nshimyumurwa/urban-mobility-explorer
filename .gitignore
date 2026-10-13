@@ -1,6 +1,9 @@
 data/yellow_tripdata_2019-01.csv
 data/yellow_tripdata_*.parquet
 database/mobility.db
+database/*.db.*.bak
+database/mobility-build-*.db*
+.venv/
 backend/__pycache__/
 docs/.venv/
 .continue/
